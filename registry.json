@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "publishedAt": "2026-04-28T00:00:00Z",
+  "skills": {
+    "cloudflare-worker-deploy": {
+      "description": "Deploy a Cloudflare Worker via wrangler with env-aware secrets. Covers wrangler.jsonc selection, secret bindings, route verification with wrangler tail, and OpenNext deploys.",
+      "path": "skills/cloudflare-worker-deploy",
+      "tags": ["cloudflare", "worker", "wrangler", "deploy"],
+      "endorsed": true,
+      "version": "1.0.0",
+      "license": "Apache-2.0"
+    },
+    "git-workflow": {
+      "description": "Commit, branch, and PR conventions: small commits with conventional messages, branches named with a type/scope prefix, PRs that fit on one screen and pass CI before requesting review.",
+      "path": "skills/git-workflow",
+      "tags": ["git", "workflow", "github", "pr", "conventional-commits"],
+      "endorsed": true,
+      "version": "1.0.0",
+      "license": "MIT"
+    },
+    "vitest-runner": {
+      "description": "Run vitest with the project's own config. Prefer vitest run over watch mode during agent sessions, use --reporter=basic for compact output, and read first-failure-first when triaging.",
+      "path": "skills/vitest-runner",
+      "tags": ["vitest", "test", "javascript", "typescript", "tdd"],
+      "endorsed": true,
+      "version": "1.0.0",
+      "license": "MIT"
+    },
+    "mcp-server-debug": {
+      "description": "Diagnose an MCP server that is failing to register tools or returning errors. Walks through stdio handshake, env-var injection, tool-schema introspection, and host-side debugging.",
+      "path": "skills/mcp-server-debug",
+      "tags": ["mcp", "model-context-protocol", "debug", "stdio"],
+      "endorsed": true,
+      "version": "1.0.0",
+      "license": "MIT"
+    },
+    "next-15-app-router": {
+      "description": "Patterns for Next.js 15 App Router projects — server vs. client components, route handlers, async params (Next 15 change), revalidation, and metadata.",
+      "path": "skills/next-15-app-router",
+      "tags": ["next", "nextjs", "react", "app-router", "server-components"],
+      "endorsed": true,
+      "version": "1.0.0",
+      "license": "MIT"
+    }
+  }
+}
