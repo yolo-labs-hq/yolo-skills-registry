@@ -1,7 +1,15 @@
 {
   "version": 1,
-  "publishedAt": "2026-04-29T00:00:00Z",
+  "publishedAt": "2026-05-13T00:00:00Z",
   "skills": {
+    "yolo-plan-authoring": {
+      "description": "Author a YOLO Work Plan from operator intent. Load when the operator wants to create or author a multi-step Plan, parallelize work across tracks, ship a feature as a Run, structure substrate work into a DAG, build something non-trivial, scaffold a project, or design a DAG. Covers the canonical 2N+3 shape (discover → parallel tracks → reviews + critic → address_findings), the relaxed gate schema, review/preview Step contracts, and the re-review loop.",
+      "path": "skills/yolo-plan-authoring",
+      "tags": ["yolo", "substrate", "plan", "work-plan", "dag", "fan-out", "fan-in", "mcp"],
+      "endorsed": true,
+      "version": "1.0.0",
+      "license": "Apache-2.0"
+    },
     "cloudflare-worker-deploy": {
       "description": "Deploy a Cloudflare Worker via wrangler with env-aware secrets. Covers wrangler.jsonc selection, secret bindings, route verification with wrangler tail, and OpenNext deploys.",
       "path": "skills/cloudflare-worker-deploy",
