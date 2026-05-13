@@ -1,7 +1,7 @@
 ---
 name: yolo-plan-authoring
 description: |
-  Author a YOLO Work Plan from operator intent. Load when the operator wants to create or author a multi-step Plan, parallelize work across tracks, ship a feature as a Run, structure substrate work into a DAG, build something non-trivial, scaffold a project, or otherwise asks to design a Plan / Plan Run. Concrete trigger phrases: "create a plan", "author a plan", "parallelize", "ship X as a Run", "set up a Run for", "design a DAG", "build X" (multi-step), "scaffold Y", "split across tracks", "fan out", "wire up substrate steps". Prefer this skill over tile-by-tile creation whenever the operator's intent spans more than one Step.
+  Author a YOLO Work Plan from operator intent. Load when the operator wants to create or author a multi-step Plan, parallelize work across tracks, ship a feature as a Run, structure substrate work into a DAG, build something non-trivial, scaffold a project, or design a DAG. Concrete trigger phrases: "create a plan", "author a plan", "parallelize", "ship X as a Run", "set up a Run for", "design a DAG", "build X" (multi-step), "scaffold Y", "split across tracks", "fan out", "wire up substrate steps". Prefer this skill over tile-by-tile creation whenever the operator's intent spans more than one Step.
 license: Apache-2.0
 compatibility: YOLO Studio substrate (work.* MCP tools)
 metadata:
@@ -23,6 +23,7 @@ The detailed contracts are split across sibling files (all delivered alongside t
 - `re-review-loop.md` — the DAG pattern for re-validating after address_findings, expressed via existing substrate primitives (`work.insert_step` + `dependency` gates). Read before authoring any non-trivial Plan that should retry on REQUEST_CHANGES verdicts.
 - `address-findings.md` — the dispatch logic the address_findings Step's prompt MUST embed. Steps 1–7 plus the loop invariant. Read before authoring an address_findings Step.
 - `preview-step-contract.md` — the contract for `mode: preview` Steps. Port shape (always `'auto'`, never a literal), env / command wiring, readiness probe choice. Read before adding a preview Step to a Plan.
+- `bake-off-pattern.md` — the right shape for "two agents race, pick the winner" Plans. Read before authoring any Plan where multiple agents produce alternative outputs that get evaluated against each other.
 - `snippets/critic-wrapper.sh` — reference shell for the critic Step's `command` (always-exits-0 wrapper that captures real build exit codes into a `produces` artifact).
 
 The small sections below stay inline because they're either short or load-bearing at every authoring step.
@@ -59,6 +60,22 @@ Do NOT add empty config: {} wrappers. Do NOT invent gateIds — let the validato
 - manual — operator action required
 </step_modes>
 
+<watchdog_defaults>
+The substrate already enforces per-agent watchdog defaults at the runner layer (`containers/services/container-api/lane-prompt.js`). DO NOT override them unless you have a specific, narrower reason than "I want to be cautious":
+
+  claude / codex:  silenceMs:  5 min,  maxDurationMs:  90 min
+  yolo / yolo-code: silenceMs: 10 min, maxDurationMs: 120 min
+
+These bounds are deliberately generous so the watchdog catches genuinely-stuck agents without strangling creative or open-ended Steps. On 2026-05-13 a bake-off Plan set `template.maxDurationMs: 600000` (10 min) for a "build something visually stunning" Step — claude was killed at exactly 600s with no commits while yolo finished the same task in 149s under the default. The Plan's caller-imposed cap defeated the substrate's headroom for the agent it ended up scoping incorrectly for.
+
+Override rules:
+- `template.maxDurationMs` — only lower if the Step is a genuinely small, time-bound action (a single test run, a single deploy ping, a CI fan-out where you want fast-fail at 5 min). Open-ended creative or build-something Steps: leave it alone.
+- `template.silenceMs` — only lower if the Step's expected output cadence is shorter than the default (e.g. a Step that should print a heartbeat line every 30s). Default is a soft floor, not a hard one.
+- If you're not sure, omit both fields. The default carries.
+
+The watchdog kill classifies as `failureMode: 'environmental'`, which means the failure router can `auto-retry` it cleanly. See the autoRetryCap recommendation in the intake protocol below.
+</watchdog_defaults>
+
 <canonical_plan_shape>
 A typical Plan has 4 phases:
   1. Discover (1 step, claude, mode=workstream)
@@ -78,7 +95,10 @@ Before authoring, you MUST resolve with the operator:
   3. Parallelizable slices (file-disjoint groupings of the surface)
   4. Review intensity (which slices warrant codex review)
   5. Critic shape (typecheck? lint? test? preview-load?)
-  6. Failure policy (pause-and-wait default; auto-retry only for environmentals)
+  6. Failure policy + retry budget:
+     - `failurePolicy: 'pause-and-wait'` (default) for delivery work where a real failure should stop the Run.
+     - `failurePolicy: 'proceed-on-non-blocked'` for bake-offs / races / N-track fan-outs where one failing branch shouldn't kill the rest (see `bake-off-pattern.md`).
+     - `autoRetryCap: 1` at the Plan level is a cheap safety net for any Plan that touches external resources (network, npm/pip install, compile-and-run flows, anything in watchdog territory). The substrate classifies watchdog kills as `environmental`, which is exactly what auto-retry handles. Skip only when retries are explicitly unsafe (mutating external state, dispatch-once side effects).
 
 Ask one focused question per turn until resolved. Do NOT begin work.plans.create until all 6 are answered.
 </intake_protocol>
@@ -458,6 +478,118 @@ For Plans that have a simple structure (e.g., a fun visual demo with no review l
 - ❌ Hardcoding `PORT` in `env` (the substrate injects it; your value would lose the race)
 - ❌ Setting `cwd: '/home/yolo/workspace'` "to make sure node_modules is there" — that's stale main without your upstream Step's commits; let the chained lane do its job
 - ❌ Authoring a preview Step BEFORE the work that produces the UI exists; gate it on the right upstream Step
+</file>
+
+<file path="bake-off-pattern.md">
+# Bake-off pattern
+
+A "bake-off" Plan has two (or more) agents independently produce a candidate output for the same task, then a synthesis Step picks the winner. The shape is genuinely useful — agent A and agent B race on the same creative or open-ended problem, the operator gets to compare and pick. But the substrate's gate model has a sharp edge here and the wiring needs care.
+
+Reference incident: a 2026-05-13 bake-off Plan ("React Viz Bake-off: Claude vs YOLO") wedged when one branch hit the watchdog at exactly 600s. The pick-winner Step gated on **both** upstreams succeeding via a vanilla `dependency` gate; the failing branch made the gate unreachable and cascaded the rest of the Plan to skipped. A one-sided bake-off was unrecoverable.
+
+## The trap
+
+The naive shape — and the one to avoid — is:
+
+```yaml
+# DON'T DO THIS
+- stepId: pick-winner
+  mode: workstream
+  gates:
+    - { type: dependency, stepId: claude-viz }    # ALL upstreams must succeed
+    - { type: dependency, stepId: yolo-viz }      # both gates → both succeed
+```
+
+Substrate `dependency` gates require **success** on the referenced Step. There is no native "at-least-one-succeeded" gate type today (see SUBSTRATE_IMPROVEMENTS item 53 for the open feature request). If either branch fails, `pick-winner` becomes `gate-unreachable` and the synthesis never runs even though one finisher is sitting right there with a usable artifact.
+
+## The right shape
+
+Three coordinated changes turn this into a graceful pattern:
+
+### 1. Plan-level failure policy
+
+```yaml
+failurePolicy: proceed-on-non-blocked
+autoRetryCap: 1
+```
+
+`proceed-on-non-blocked` means a failure in one branch doesn't pause or cancel the Run — the dispatcher just stops scheduling Steps that depend on the failed one. The other branches and downstream synthesis can still run. Without this, the first branch failure ends the Run regardless of how clever the gate shape is.
+
+`autoRetryCap: 1` gives each branch one cheap retry on `environmental` failures (the watchdog classification). One agent being 10 seconds short of finishing is the most common shape; auto-retry handles it without operator intervention.
+
+### 2. Synthesis Step gates on artifacts, not predecessor success
+
+Each candidate Step declares a `branch` (or `commit-sha`) artifact in its `produces`. The synthesis Step gates on **artifact presence**, not predecessor success:
+
+```yaml
+- stepId: claude-viz
+  mode: workstream
+  template:
+    agentType: claude
+    produces:
+      - { name: candidate-branch, path: ".yolo/runtime/lane-branch.txt", artifactType: branch }
+
+- stepId: yolo-viz
+  mode: workstream
+  template:
+    agentType: yolo
+    produces:
+      - { name: candidate-branch, path: ".yolo/runtime/lane-branch.txt", artifactType: branch }
+
+- stepId: pick-winner
+  mode: workstream
+  gates:
+    # NO `dependency` gates that require BOTH upstreams to succeed.
+    # Use artifact-presence so the gate opens as soon as at least one
+    # candidate has produced an artifact, regardless of the other.
+    - { type: artifact-presence, artifactType: branch }
+  template:
+    agentType: claude
+    consumes:
+      - { from: claude-viz, name: candidate-branch }
+      - { from: yolo-viz,   name: candidate-branch }
+```
+
+Until item 53 ships, the `artifact-presence` gate's exact semantics for "at least one of N artifacts" requires checking the validator's current behavior — be prepared for the gate to evaluate per-artifact rather than per-set. If both branches finish, the gate fires on the first artifact reported and the synthesis Step runs.
+
+### 3. The synthesis prompt handles one-finisher gracefully
+
+The `pick-winner` Step's prompt MUST tolerate any subset of candidates having produced an artifact. Pseudocode for the prompt's logic:
+
+```
+Read all `consumes` artifacts. For each, check whether the upstream
+Step Run succeeded AND produced a branch.
+
+If both candidates have branches → compare them (read each branch's
+README or screenshot, ask the operator to choose, or apply
+deterministic criteria). Report the winner.
+
+If exactly one candidate has a branch → pick it. Note in the output
+that this was a one-sided pick because the other branch failed
+(include the failed Step's `failureReason` for the audit trail).
+
+If neither candidate has a branch → fail the synthesis Step with a
+clear message: "no candidates produced an output; bake-off cannot
+proceed."
+```
+
+The substrate gives you `work.get_step_run` to read each upstream Step Run's state and `studio.get_artifact` to fetch the actual branch name. Both are available to a `mode: workstream` Step's worker via the standard MCP surface.
+
+## When NOT to use this pattern
+
+Bake-offs are interesting when the *output* is what's being evaluated, and the *agents* are interchangeable producers. Don't reach for the bake-off pattern when:
+
+- The two "candidates" are actually different work items. Use two parallel `track_a` / `track_b` workstreams with the standard 2N+3 shape instead.
+- One agent is clearly better-suited (e.g. codex for review, claude for visual). Pick the right agent for the job and skip the race.
+- The synthesis criterion is automatic (typecheck pass, test result, file size). Use a `mode: critic` Step gated on both candidates — that's a different pattern with different semantics, not a bake-off.
+
+## Anti-patterns
+
+- ❌ `pick-winner` gates with `dependency: [a, b]`. Pure cascading failure.
+- ❌ `failurePolicy: 'pause-and-wait'` on a bake-off Plan. One slow agent pauses the entire Run.
+- ❌ Setting `template.maxDurationMs` lower than the substrate default for the candidate Steps. The agent picked may need the full default window — see the `<watchdog_defaults>` section in `SKILL.md`.
+- ❌ Synthesis prompt that assumes both candidates finished. The whole point of this pattern is that one might not.
+- ❌ Bake-off with no `autoRetryCap`. Watchdog kills are exactly the failure mode auto-retry exists for.
 </file>
 
 <file path="snippets/critic-wrapper.sh">
