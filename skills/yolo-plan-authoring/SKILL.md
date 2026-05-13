@@ -28,6 +28,16 @@ The detailed contracts are split across sibling files (all delivered alongside t
 
 The small sections below stay inline because they're either short or load-bearing at every authoring step.
 
+<iteration_protocol>
+**Call `work.create_plan` EXACTLY ONCE per operator intent.** Each call writes a separate Plan to the workspace; calling it repeatedly accumulates orphan Plans and yolo-code will trip its same-tool loop guard after 5 consecutive calls.
+
+To revise the Plan you just authored — fix a Step template, address `warnings[]` in the response, change the failure policy, add or remove Steps — use **`work.update_plan`** (baseVersion-guarded coarse mutations: `set-plan-fields`, `add-step`, `update-step`, `remove-step`, `set-state`) or **`work.mutate_plan`** (fine-grained Step patches). DO NOT recreate the Plan to "try again" with different parameters.
+
+**`warnings[]` in the `work.create_plan` response are soft advisories — the Plan was already written successfully.** Read each warning; if the default it describes is acceptable for the operator's intent, proceed to `work.start_run`. If the warning is wrong for this Plan (e.g. the warning notes "all workstream Steps default to the workspace agent" but the operator wanted a multi-agent bake-off), fix the offending Step with a `work.update_plan` `update-step` mutation that patches `template.agentType` / `template.mergeStrategy` / etc. — then `work.start_run`. Never address a warning by recreating the Plan.
+
+If the operator's intent itself was wrong — Plan should never have been authored — discard with `work.update_plan` `set-state` (state = "discarded") rather than leaving an orphan and authoring a new one.
+</iteration_protocol>
+
 <critical_constraints>
 - Two parallel tracks NEVER edit the same file. This is the most important rule. On 2026-05-12 a Plan Run wedged because two parallel tracks both redeclared the same enum line. If you cannot guarantee file-disjoint tracks, serialize them with a dependency gate.
 - Discovery is always the first step. A claude Step that reads the surface area and emits a tasks_set list of files-per-track. The discover Step writes ONLY to `.yolo/runtime/tasks_set.json` (gitignored) and produces no code changes, so it MUST use `mergeStrategy: "standalone"` (lane never merges to integration), declare `produces: [{ name: "tasks_set", path: ".yolo/runtime/tasks_set.json" }]`, and end with an empty commit (`git commit --allow-empty -m "discover complete"`) to clear the substrate's `workstream-no-commits` heuristic — same pattern reviews use. Every downstream Step that needs scoping (reviews, re-reviews, address_findings) declares matching `consumes: [{ from: "discover", name: "tasks_set" }]`. Do not guess surfaces; have the discover Step inventory them.

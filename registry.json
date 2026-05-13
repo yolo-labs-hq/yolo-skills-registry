@@ -1,13 +1,13 @@
 {
   "version": 1,
-  "publishedAt": "2026-05-13T12:00:00Z",
+  "publishedAt": "2026-05-13T18:00:00Z",
   "skills": {
     "yolo-plan-authoring": {
-      "description": "Author a YOLO Work Plan from operator intent. Load when the operator wants to create or author a multi-step Plan, parallelize work across tracks, ship a feature as a Run, structure substrate work into a DAG, build something non-trivial, scaffold a project, or design a DAG. Covers the canonical 2N+3 shape (discover → parallel tracks → reviews + critic → address_findings), the relaxed gate schema, review / preview / bake-off Step contracts, watchdog defaults, autoRetryCap, and the re-review loop.",
+      "description": "Author a YOLO Work Plan from operator intent. Load when the operator wants to create or author a multi-step Plan, parallelize work across tracks, ship a feature as a Run, structure substrate work into a DAG, build something non-trivial, scaffold a project, or design a DAG. Covers the canonical 2N+3 shape (discover → parallel tracks → reviews + critic → address_findings), the relaxed gate schema, review / preview / bake-off Step contracts, watchdog defaults, autoRetryCap, the re-review loop, and the iteration protocol (use work.update_plan to revise, not another work.create_plan).",
       "path": "skills/yolo-plan-authoring",
       "tags": ["yolo", "substrate", "plan", "work-plan", "dag", "fan-out", "fan-in", "mcp", "bake-off"],
       "endorsed": true,
-      "version": "1.1.0",
+      "version": "1.2.0",
       "license": "Apache-2.0"
     },
     "cloudflare-worker-deploy": {
