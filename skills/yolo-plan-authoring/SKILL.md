@@ -5,7 +5,7 @@ description: |
 license: Apache-2.0
 compatibility: YOLO Studio substrate (work.* MCP tools)
 metadata:
-  tags: [yolo, substrate, plan, work-plan, dag, fan-out, fan-in, mcp]
+  tags: [yolo, substrate, plan, work-plan, dag, fan-out, fan-in, mcp, bake-off]
 ---
 
 
@@ -493,9 +493,9 @@ For Plans that have a simple structure (e.g., a fun visual demo with no review l
 <file path="bake-off-pattern.md">
 # Bake-off pattern
 
-A "bake-off" Plan has two (or more) agents independently produce a candidate output for the same task, then a synthesis Step picks the winner. The shape is genuinely useful — agent A and agent B race on the same creative or open-ended problem, the operator gets to compare and pick. But the substrate's gate model has a sharp edge here and the wiring needs care.
+A "bake-off" Plan has two (or more) agents independently produce a candidate output for the same task, then a synthesis Step picks the winner. The shape is genuinely useful — agent A and agent B race on the same creative or open-ended problem, the operator gets to compare and pick. The substrate's `dependency-any-of` gate type makes this a first-class pattern.
 
-Reference incident: a 2026-05-13 bake-off Plan ("React Viz Bake-off: Claude vs YOLO") wedged when one branch hit the watchdog at exactly 600s. The pick-winner Step gated on **both** upstreams succeeding via a vanilla `dependency` gate; the failing branch made the gate unreachable and cascaded the rest of the Plan to skipped. A one-sided bake-off was unrecoverable.
+Reference incident: a 2026-05-13 bake-off Plan ("React Viz Bake-off: Claude vs YOLO") wedged when one branch hit the watchdog at exactly 600s. The pick-winner Step gated on **both** upstreams succeeding via a vanilla `dependency` gate; the failing branch made the gate unreachable and cascaded the rest of the Plan to skipped. A one-sided bake-off was unrecoverable. SUBSTRATE_IMPROVEMENTS item 53 shipped 2026-05-13 to close this gap.
 
 ## The trap
 
@@ -510,26 +510,11 @@ The naive shape — and the one to avoid — is:
     - { type: dependency, stepId: yolo-viz }      # both gates → both succeed
 ```
 
-Substrate `dependency` gates require **success** on the referenced Step. There is no native "at-least-one-succeeded" gate type today (see SUBSTRATE_IMPROVEMENTS item 53 for the open feature request). If either branch fails, `pick-winner` becomes `gate-unreachable` and the synthesis never runs even though one finisher is sitting right there with a usable artifact.
+Vanilla `dependency` gates require **success** on the referenced Step. With two of them, the synthesis Step needs both branches to finish. One failing branch makes `pick-winner` `gate-unreachable` and the synthesis never runs even though one finisher is sitting right there with a usable artifact.
 
-## The right shape
+## The right shape (native `dependency-any-of`)
 
-Three coordinated changes turn this into a graceful pattern:
-
-### 1. Plan-level failure policy
-
-```yaml
-failurePolicy: proceed-on-non-blocked
-autoRetryCap: 1
-```
-
-`proceed-on-non-blocked` means a failure in one branch doesn't pause or cancel the Run — the dispatcher just stops scheduling Steps that depend on the failed one. The other branches and downstream synthesis can still run. Without this, the first branch failure ends the Run regardless of how clever the gate shape is.
-
-`autoRetryCap: 1` gives each branch one cheap retry on `environmental` failures (the watchdog classification). One agent being 10 seconds short of finishing is the most common shape; auto-retry handles it without operator intervention.
-
-### 2. Synthesis Step gates on artifacts, not predecessor success
-
-Each candidate Step declares a `branch` (or `commit-sha`) artifact in its `produces`. The synthesis Step gates on **artifact presence**, not predecessor success:
+Use the native any-of gate type, which is satisfied the moment **any one** of the referenced upstreams reaches `succeeded`. Only when **every** referenced upstream is terminal-without-success (all failed / cancelled / skipped) is the gate unreachable.
 
 ```yaml
 - stepId: claude-viz
@@ -549,10 +534,10 @@ Each candidate Step declares a `branch` (or `commit-sha`) artifact in its `produ
 - stepId: pick-winner
   mode: workstream
   gates:
-    # NO `dependency` gates that require BOTH upstreams to succeed.
-    # Use artifact-presence so the gate opens as soon as at least one
-    # candidate has produced an artifact, regardless of the other.
-    - { type: artifact-presence, artifactType: branch }
+    # Native any-of: gate opens as soon as ONE upstream succeeds.
+    # If both finish, the gate fires on the first to reach succeeded
+    # and the synthesis Step dispatches.
+    - { type: dependency-any-of, stepIds: [claude-viz, yolo-viz] }
   template:
     agentType: claude
     consumes:
@@ -560,9 +545,24 @@ Each candidate Step declares a `branch` (or `commit-sha`) artifact in its `produ
       - { from: yolo-viz,   name: candidate-branch }
 ```
 
-Until item 53 ships, the `artifact-presence` gate's exact semantics for "at least one of N artifacts" requires checking the validator's current behavior — be prepared for the gate to evaluate per-artifact rather than per-set. If both branches finish, the gate fires on the first artifact reported and the synthesis Step runs.
+The gate's config carries `stepIds: string[]` (not `stepId`). Every entry must reference a real upstream Step in the same Plan; duplicates and self-references are rejected by the validator at create-plan time. A single-element `stepIds: [x]` is structurally valid but degenerate (behaves like a vanilla `dependency` gate on `x`); use a real `dependency` gate for that case.
 
-### 3. The synthesis prompt handles one-finisher gracefully
+`gateId` is derived as `<first-upstream>-any-of-<N>` when omitted — `claude-viz-any-of-2` for the example above. Pass an explicit `gateId` if you need a more specific name.
+
+## Coordinating Plan-level settings
+
+Two Plan-level settings make the bake-off resilient:
+
+```yaml
+failurePolicy: proceed-on-non-blocked
+autoRetryCap: 1
+```
+
+`proceed-on-non-blocked` means a failure in one branch doesn't pause or cancel the Run — the dispatcher just stops scheduling Steps that depend on the failed branch. The other branches and downstream synthesis can still run. Without this, the first branch failure ends the Run regardless of how clever the gate shape is.
+
+`autoRetryCap: 1` gives each branch one cheap retry on `environmental` failures (the watchdog classification). One agent being 10 seconds short of finishing is the most common shape; auto-retry handles it without operator intervention.
+
+## The synthesis prompt handles one-finisher gracefully
 
 The `pick-winner` Step's prompt MUST tolerate any subset of candidates having produced an artifact. Pseudocode for the prompt's logic:
 
@@ -583,7 +583,7 @@ clear message: "no candidates produced an output; bake-off cannot
 proceed."
 ```
 
-The substrate gives you `work.get_step_run` to read each upstream Step Run's state and `studio.get_artifact` to fetch the actual branch name. Both are available to a `mode: workstream` Step's worker via the standard MCP surface.
+The substrate gives you `work.get_step_run` to read each upstream Step Run's state, `work.get_step_run_transcript` (substrate item 54, shipped 2026-05-13) to read each upstream's agent transcript when triaging a failure, and `studio.get_artifact` to fetch the actual branch name. All three are available to a `mode: workstream` Step's worker via the standard MCP surface.
 
 ## When NOT to use this pattern
 
@@ -595,11 +595,34 @@ Bake-offs are interesting when the *output* is what's being evaluated, and the *
 
 ## Anti-patterns
 
-- ❌ `pick-winner` gates with `dependency: [a, b]`. Pure cascading failure.
+- ❌ `pick-winner` gates with `dependency: [a, b]` (vanilla all-of). Pure cascading failure when one branch fails. Use `dependency-any-of` instead.
 - ❌ `failurePolicy: 'pause-and-wait'` on a bake-off Plan. One slow agent pauses the entire Run.
 - ❌ Setting `template.maxDurationMs` lower than the substrate default for the candidate Steps. The agent picked may need the full default window — see the `<watchdog_defaults>` section in `SKILL.md`.
 - ❌ Synthesis prompt that assumes both candidates finished. The whole point of this pattern is that one might not.
 - ❌ Bake-off with no `autoRetryCap`. Watchdog kills are exactly the failure mode auto-retry exists for.
+- ❌ `dependency-any-of` with `stepIds` containing the synthesis Step itself. Validator rejects self-references; even if it didn't, the gate would never open.
+- ❌ Duplicate stepIds in `dependency-any-of`. Validator rejects — list each upstream once.
+
+## Historical: the pre-item-53 workaround
+
+Before the native `dependency-any-of` gate type shipped (2026-05-13), the bake-off pattern needed a heavier workaround:
+
+```yaml
+# PRE-ITEM-53 — do not author new Plans this way; use the native shape above
+- stepId: pick-winner
+  mode: workstream
+  gates:
+    - { type: artifact-presence, artifactType: branch }  # any branch artifact
+  template:
+    agentType: claude
+    consumes:
+      - { from: claude-viz, name: candidate-branch }
+      - { from: yolo-viz,   name: candidate-branch }
+```
+
+The workaround leaned on `artifact-presence`'s permissive evaluation semantics combined with `failurePolicy: proceed-on-non-blocked` to fake an any-of by having the gate fire on whichever upstream reported its artifact first. It worked but had two sharp edges: (1) the gate had no audit trail recording which upstream satisfied it, and (2) the synthesis Step couldn't tell why a missing candidate was missing (failed vs. never dispatched). The native `dependency-any-of` gate's `upstreamStates[]` detail block fixes both.
+
+Plans authored before 2026-05-13 may still use the workaround shape; the substrate keeps `artifact-presence` semantics unchanged. New Plans should use the native gate.
 </file>
 
 <file path="snippets/critic-wrapper.sh">
