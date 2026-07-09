@@ -187,6 +187,20 @@
       "version": "1.0.0",
       "license": "MIT",
       "source": "https://github.com/addyosmani/agent-skills/tree/main/skills/test-driven-development"
+    },
+    "xquik-social-data": {
+      "description": "Use Xquik as an API or remote MCP source for X/Twitter search, analytics, monitoring, webhooks, and approval-gated publishing.",
+      "path": "skills/xquik-social-data",
+      "tags": [
+        "xquik",
+        "x-twitter",
+        "social-media",
+        "mcp",
+        "automation"
+      ],
+      "endorsed": false,
+      "version": "1.0.0",
+      "license": "MIT"
     }
   }
 }

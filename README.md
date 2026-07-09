@@ -1,6 +1,6 @@
 # yolo-skills-registry
 
-Curated registry of agent skills for [yolo-code](https://github.com/yolo-labs-hq/yolo-code) — playbook-style guidance that ships as `SKILL.md` files (the [agentskills](https://github.com/agentskills/agentskills) spec).
+Curated registry of agent skills for yolo-code - playbook-style guidance that ships as `SKILL.md` files (the [agentskills](https://github.com/agentskills/agentskills) spec).
 
 ## Install a skill
 
@@ -32,6 +32,7 @@ export YOLO_SKILLS_REGISTRY_TARBALL_URL=https://my-fork/archive/main.tar.gz
 | `vitest-runner` | vitest, test, tdd | `vitest run` over watch, basic reporter, first-failure-first triage. |
 | `mcp-server-debug` | mcp, debug, stdio | Validate the MCP handshake, inspect tools/list, env-var injection, schema mismatches. |
 | `next-15-app-router` | next, nextjs, react | Server vs. client components, async params (Next 15 change), revalidation, metadata. |
+| `xquik-social-data` | xquik, x-twitter, social-media, mcp, automation | Use Xquik for X/Twitter research, analytics, monitoring, and approval-gated publishing workflows. |
 
 ## Repo layout
 
@@ -75,6 +76,13 @@ yolo-skills-registry/
 3. Validate locally: `yolo skills validate skills/<your-skill-name>`.
 4. Add a corresponding entry to `registry.json`.
 5. Open a PR. Keep skills focused — one playbook per skill.
+
+Before opening a PR, also check that the registry entry points at a real
+`SKILL.md` file:
+
+```bash
+node -e 'const fs=require("fs");const r=JSON.parse(fs.readFileSync("registry.json","utf8"));for(const [name,s] of Object.entries(r.skills)){const p=`${s.path}/SKILL.md`;if(!fs.existsSync(p)) throw new Error(`${name} missing ${p}`)}'
+```
 
 ## License
 
